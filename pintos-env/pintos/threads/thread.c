@@ -28,6 +28,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/* List of sleeping threads */
+static struct list sleeping_threads;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -71,6 +74,9 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+bool compare_threads_wakeup_tick(struct list_elem *le1, struct list_elem *le2, void *aux);
+void check_sleeping_threads(void);
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -92,6 +98,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleeping_threads);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -137,6 +144,8 @@ thread_tick (void)
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
+
+  check_sleeping_threads();
 }
 
 /* Prints thread statistics. */
@@ -226,6 +235,15 @@ thread_block (void)
 
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
+}
+
+/* Compares the wakeup_tick of two given threads, in ascending order. This function shall
+   be invoked from list_sort. */
+bool compare_threads_wakeup_tick(struct list_elem *le1, struct list_elem *le2, void *aux UNUSED)
+{
+  struct thread *t1 = list_entry(le1, struct thread, elem);
+  struct thread *t2 = list_entry(le2, struct thread, elem);
+  return t1->wakeup_tick < t2->wakeup_tick;
 }
 
 /* Transitions a blocked thread T to the ready-to-run state.
@@ -582,6 +600,34 @@ allocate_tid (void)
   return tid;
 }
 
+/* Puts the current thread to sleep until the specified tick. This thread is inserted in ascending 
+   order into the list by the wakeup tick. */
+void thread_sleep(int64_t wakeup) {
+  enum intr_level old_lvl = intr_disable();
+  struct thread * curr = thread_current();
+  curr->wakeup_tick = wakeup;
+  list_insert_ordered(&sleeping_threads, &curr->elem, &compare_threads_wakeup_tick, NULL);
+  thread_block();
+  intr_set_level(old_lvl);
+}
+
+/* Checks if any thread has to wake up. As the sleeping thread list is already sorted, when a thread
+   that does not need to wakeup yet appears, no further threads need to be checked. */
+void check_sleeping_threads() {
+  enum intr_level old_lvl = intr_disable();
+  struct list_elem *it = list_begin(&sleeping_threads);
+  int64_t now = timer_ticks();
+
+  while (it != list_end(&sleeping_threads)) {
+    struct thread *t = list_entry(it,struct thread, elem);
+    if (now < t->wakeup_tick) return;
+    it = list_remove(it);
+    thread_unblock(t);
+  }
+
+  intr_set_level(old_lvl);
+}
+
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
