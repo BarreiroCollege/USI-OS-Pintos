@@ -1,0 +1,25 @@
+name: 'PintOS Tests Checker'
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  threads:
+    name: 'Threads'
+    runs-on: 'macos-10.15'
+
+    steps:
+      - name: 'Clone Repository'
+        uses: 'actions/checkout@v2'
+
+      - name: 'Start Vagrant'
+        run: vagrant up
+
+      - name: 'Build Pintos'
+        run: 'vagrant ssh -c "cd /pintos-env/pintos/threads/ && make clean && make"'
+
+      - name: 'Run Tests'
+        run: 'vagrant ssh -c "cd /pintos-env/pintos/threads/ && make check"'
