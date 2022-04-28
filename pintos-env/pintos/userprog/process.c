@@ -15,11 +15,18 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+struct arguments {
+  int argc;
+  char **argv;
+};
+
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (struct arguments *, void (**eip) (void), void **esp);
+static struct arguments *parse_arguments(char *);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -38,8 +45,10 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  struct arguments *args = parse_arguments(fn_copy);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (args->argv[0], PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -51,6 +60,7 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
+  struct arguments *args = file_name;
   struct intr_frame if_;
   bool success;
 
@@ -59,7 +69,7 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (args, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -206,8 +216,9 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (struct arguments *args, void (**eip) (void), void **esp) 
 {
+  char *file_name = args->argv[0];
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -462,4 +473,18 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+static struct arguments *parse_arguments(char *input) {
+  struct arguments *args = (struct arguments *) malloc(sizeof(struct arguments));
+  args->argc = 0;
+  args->argv = (char **) calloc(strlen(input) + 1, sizeof(char));
+
+  char *str;
+  for (str = strtok_r(input, " ", NULL); str != NULL; str = strtok_r(NULL, " ", NULL)) {
+    args->argv[args->argc] = str;
+    args->argc += 1;
+  }
+
+  return args;
 }
