@@ -18,7 +18,9 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {
+  // Get the "start point" in the stack
   int *stack = f->esp;
+  // System call code will be always in the beginning
   int code = *(stack+0);
 
   switch (code) {
@@ -36,15 +38,20 @@ syscall_handler (struct intr_frame *f)
 }
 
 void sys_write(int *stack) {
+  // Write syscall receives three parameters: file id to write, content buffer and content length
   int fd = *(stack+1);
+  // Cast from const void * to const char *
   const char *buffer = (const char *) *(stack+2);
+  // Cast from unsigned to size_t
   size_t size = (size_t) *(stack+3);
 
   if (fd == 1)
+    // If file id to write, it means it is stdout
     putbuf(buffer, size);
 }
 
 void sys_exit(int *stack) {
+  // System exit only has the return status code
   int status = *(stack+1);
   thread_exit();
 }
