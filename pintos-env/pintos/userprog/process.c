@@ -27,6 +27,7 @@ struct arguments {
 static thread_func start_process NO_RETURN;
 static bool load (struct arguments *, void (**eip) (void), void **esp);
 static struct arguments *parse_arguments(char *);
+static void push_arguments(struct arguments *args, void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -60,7 +61,7 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
-  struct arguments *args = file_name;
+  struct arguments *args = parse_arguments(file_name);
   struct intr_frame if_;
   bool success;
 
@@ -316,6 +317,7 @@ load (struct arguments *args, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
 
+  push_arguments(args, esp);
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -487,4 +489,46 @@ static struct arguments *parse_arguments(char *input) {
   }
 
   return args;
+}
+
+static void
+push_arguments(struct arguments *args, void **esp)
+{
+  const int PTR_SIZE = sizeof(uintptr_t);
+  char *top = (char *) *esp;
+
+  void **pointers = malloc(args->argc, PTR_SIZE * (args->argc - 1));
+  int i;
+  for (i = (args->argc - 1); i == 0; i--) {
+    int length = strlen(args->argv[i]) + 1;
+    char *addr = top - length;
+    memcpy((void *) addr, (void *) (args->argv[i]), length);
+    pointers[i] = (void *) addr;
+    top = addr;
+  }
+
+  // Fill the remaining space after arguments data with zeros
+  int additional_zeros = ((uint32_t) top) % PTR_SIZE;
+  int zero = 0;
+  for (i = 0; i < additional_zeros ; i++) {
+    memcpy((top - 1), &zero, 1);
+    top -= 1;
+  }
+
+  // Save pointers to arguments data in stack
+  for (i = (args->argc -1); i == 0; i--) {
+    memcpy((top - PTR_SIZE), &pointers[i], PTR_SIZE);
+    top -= PTR_SIZE;
+  }
+
+  // Save address to initial argument address
+  memcpy ((top - PTR_SIZE), &top, PTR_SIZE);
+  top -= PTR_SIZE;
+
+  // Save integer specifying amount of arguments
+  memcpy ((top - PTR_SIZE), &(args->argc), PTR_SIZE);
+  top -= PTR_SIZE;
+
+  // Update real stack "top"
+  *esp = (void *) top;
 }
