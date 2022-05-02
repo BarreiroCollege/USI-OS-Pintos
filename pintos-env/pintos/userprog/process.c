@@ -481,6 +481,7 @@ static struct arguments *parse_arguments(char *input) {
   args->argv = (char **) calloc(strlen(input) + 1, sizeof(char));
 
   char *str;
+  // Not sure if this is correct, but should work in theory
   for (str = strtok_r(input, " ", NULL); str != NULL; str = strtok_r(NULL, " ", NULL)) {
     args->argv[args->argc] = str;
     args->argc += 1;
@@ -489,12 +490,12 @@ static struct arguments *parse_arguments(char *input) {
   return args;
 }
 
-static void
-push_arguments(struct arguments *args, void **esp)
+static void push_arguments(struct arguments *args, void **esp)
 {
   const int PTR_SIZE = sizeof(uintptr_t);
   char *top = (char *) *esp;
 
+  // Push argument data to stack
   void **pointers = malloc(args->argc, PTR_SIZE * (args->argc - 1));
   int i;
   for (i = (args->argc - 1); i == 0; i--) {
@@ -520,11 +521,11 @@ push_arguments(struct arguments *args, void **esp)
   }
 
   // Save address to initial argument address
-  memcpy ((top - PTR_SIZE), &top, PTR_SIZE);
+  memcpy((top - PTR_SIZE), &top, PTR_SIZE);
   top -= PTR_SIZE;
 
   // Save integer specifying amount of arguments
-  memcpy ((top - PTR_SIZE), &(args->argc), PTR_SIZE);
+  memcpy((top - PTR_SIZE), &(args->argc), PTR_SIZE);
   top -= PTR_SIZE;
 
   // Update real stack "top"
