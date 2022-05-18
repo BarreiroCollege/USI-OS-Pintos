@@ -1,57 +1,60 @@
 #include "userprog/syscall.h"
-#include "lib/syscall-nr.h"
 #include <stdio.h>
+#include <string.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "threads/palloc.h"
+#include "userprog/process.h"
+#include "devices/shutdown.h"
 
 static void syscall_handler (struct intr_frame *);
-void sys_write(int *);
-void sys_exit(int *);
+
+typedef void (*handler) (struct intr_frame *);
+static void syscall_exit (struct intr_frame *f);
+static void syscall_write (struct intr_frame *f);
+
+#define SYSCALL_MAX_CODE 19
+static handler call[SYSCALL_MAX_CODE + 1];
 
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+
+  /* Any syscall not registered here should be NULL (0) in the call array. */
+  memset(call, 0, SYSCALL_MAX_CODE + 1);
+
+  /* Check file lib/syscall-nr.h for all the syscall codes and file
+   * lib/user/syscall.c for a short explanation of each system call. */
+  call[SYS_EXIT]  = syscall_exit;   // Terminate this process.
+  call[SYS_WRITE] = syscall_write;  // Write to a file.
 }
 
 static void
-syscall_handler (struct intr_frame *f) 
+syscall_handler (struct intr_frame *f)
 {
-  // Get the "start point" in the stack
+  int syscall_code = *((int*)f->esp);
+  call[syscall_code](f);
+}
+
+static void
+syscall_exit (struct intr_frame *f)
+{
   int *stack = f->esp;
-  // System call code will be always in the beginning
-  int code = *(stack+0);
-
-  switch (code) {
-    case SYS_WRITE:
-      sys_write(stack);
-      break;
-    
-    case SYS_EXIT:
-      sys_exit(stack);
-      break;
-    
-    default:
-      break;
-  }
+  struct thread* t = thread_current ();
+  t->exit_status = *(stack+1);
+  thread_exit ();
 }
 
-void sys_write(int *stack) {
-  // Write syscall receives three parameters: file id to write, content buffer and content length
-  int fd = *(stack+1);
-  // Cast from const void * to const char *
-  const char *buffer = (const char *) *(stack+2);
-  // Cast from unsigned to size_t
-  size_t size = (size_t) *(stack+3);
-
-  if (fd == 1)
-    // If file id to write, it means it is stdout
-    putbuf(buffer, size);
-}
-
-void sys_exit(int *stack) {
-  // System exit only has the return status code
-  int status = *(stack+1);
-  thread_exit();
+static void
+syscall_write (struct intr_frame *f)
+{
+  int *stack = f->esp;
+  ASSERT (*(stack+1) == 1); // fd 1
+  char * buffer = *(stack+2);
+  int    length = *(stack+3);
+  putbuf (buffer, length);
+  f->eax = length;
 }

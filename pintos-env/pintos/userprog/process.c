@@ -15,51 +15,110 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
-#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-struct arguments {
-  int argc;
-  char **argv;
-};
+// Pintos is a 32-bit (4-byte pointer) OS
+#define POINTER_LENGTH        4
+// The following values were chosen arbitrarily
+#define MAX_ARGS             32
+#define MAX_FILENAME_LENGTH 255
+
+void copy_onto_stack (void **, void *, int);
+void parse_args_onto_stack (void **, char *);
+
+/* This function takes the address of the top of the stack (*pp_stack_top),
+ * copies the data pointed by ptrval (which has length len) and adjusts
+ * the pointer to the top of the stack based on the number of bytes copied. */
+void
+copy_onto_stack(void ** pp_stack_top, void * ptrdata, int len)
+{
+  /* The stack grows downwards from its initial address. */
+  *pp_stack_top -= len;
+  memcpy(*pp_stack_top, ptrdata, len);
+}
+
+void
+parse_args_onto_stack (void ** pp_stack_top, char * command)
+{
+  void * stack_base = *pp_stack_top;
+
+  /* Putting argv[...][...] on the top of the stack. */
+  char * argaddrs[MAX_ARGS];
+  char * argument, * save_ptr;
+  int argcount = 0;
+  for ( argument  = strtok_r (command, " ", &save_ptr) ;
+        argument != NULL ;
+        argument  = strtok_r (NULL, " ", &save_ptr) )
+  {
+    int arglen = strlen(argument) + 1;
+    copy_onto_stack (pp_stack_top, argument, arglen);
+    argaddrs[argcount++] = *pp_stack_top;
+  }
+
+  /* argv[argc] = 0 */
+  argaddrs[argcount] = 0;
+
+  /* Padding stack to make it 4-byte aligned. */
+  int remaining = (stack_base - *pp_stack_top) % 4;
+  int pad = 4 - remaining;
+  *pp_stack_top -= pad;
+
+  /* Putting argv[i] addresses. */
+  int i;
+  for (i = argcount ; i >= 0 ; i--) {
+    copy_onto_stack (pp_stack_top, &argaddrs[i], 4);
+  }
+
+  /* Putting argv onto the stack. */
+  char * argvarraddr = *pp_stack_top;
+  copy_onto_stack (pp_stack_top, &argvarraddr, 4);
+
+  /* Putting argc onto the stack. */
+  copy_onto_stack (pp_stack_top, &argcount, 4);
+
+  /* Dummy return address of 0. */
+  int zero = 0;
+  copy_onto_stack (pp_stack_top, &zero, 4);
+}
 
 static thread_func start_process NO_RETURN;
-static bool load (struct arguments *, void (**eip) (void), void **esp);
-static struct arguments *parse_arguments(char *);
-static void push_arguments(struct arguments *args, void **esp);
+static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *file_name) 
+process_execute (const char * command)
 {
-  char *fn_copy;
+  char * cmd_copy;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
+  /* Make a copy of COMMAND.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  cmd_copy = palloc_get_page (0);
+  if (cmd_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (cmd_copy, command, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (command, PRI_DEFAULT, start_process, cmd_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (cmd_copy);
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void * command)
 {
-  char *file_name = file_name_;
-  struct arguments *args = parse_arguments(file_name);
+  /* command contains the executable file name plus all arguments.
+   * file_name will contain only the file name. */
+  char file_name[MAX_FILENAME_LENGTH];
+  str_copy_first_word(file_name, command, MAX_FILENAME_LENGTH);
+
   struct intr_frame if_;
   bool success;
 
@@ -68,12 +127,19 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (args, &if_.eip, &if_.esp);
+  success = load (file_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
+  if (!success)
+  {
+    palloc_free_page (command);
     thread_exit ();
+  }
+  else
+  {
+    parse_args_onto_stack(&if_.esp, command);
+    palloc_free_page (command);
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -95,10 +161,28 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid)
 {
+#ifdef USERPROG
+
+  enum intr_level old_level = intr_disable ();
+
+  struct thread * child = thread_get_by_tid(child_tid);
+  if (child == NULL || child->parent != thread_current())
+    return -1;
+
+  child->parent_waiting = true;
+  thread_block ();
+
+  intr_set_level (old_level);
+
+  return child->exit_status;
+#else
+  /* In case USERPROG was not defined (you can ignore/not implement this part). */
   return -1;
+#endif
 }
+
 
 /* Free the current process's resources. */
 void
@@ -123,6 +207,13 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  /* Print exit status, required for the tests. */
+  printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+  /* Unblock the parent, if the parent is waiting for this thread. */
+  if (cur->parent_waiting)
+    thread_unblock(cur->parent);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -140,7 +231,7 @@ process_activate (void)
      interrupts. */
   tss_update ();
 }
-
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
@@ -215,9 +306,8 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (struct arguments *args, void (**eip) (void), void **esp) 
+load (const char *file_name, void (**eip) (void), void **esp) 
 {
-  char *file_name = args->argv[0];
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -315,7 +405,6 @@ load (struct arguments *args, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
 
-  push_arguments(args, esp);
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -326,7 +415,7 @@ load (struct arguments *args, void (**eip) (void), void **esp)
   file_close (file);
   return success;
 }
-
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -473,61 +562,4 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
-}
-
-static struct arguments *parse_arguments(char *input) {
-  struct arguments *args = (struct arguments *) malloc(sizeof(struct arguments));
-  args->argc = 0;
-  args->argv = (char **) calloc(strlen(input) + 1, sizeof(char));
-
-  char *str;
-  // Not sure if this is correct, but should work in theory
-  for (str = strtok_r(input, " ", NULL); str != NULL; str = strtok_r(NULL, " ", NULL)) {
-    args->argv[args->argc] = str;
-    args->argc += 1;
-  }
-
-  return args;
-}
-
-static void push_arguments(struct arguments *args, void **esp)
-{
-  const int PTR_SIZE = sizeof(uintptr_t);
-  char *top = (char *) *esp;
-
-  // Push argument data to stack
-  void **pointers = malloc(args->argc, PTR_SIZE * (args->argc - 1));
-  int i;
-  for (i = (args->argc - 1); i == 0; i--) {
-    int length = strlen(args->argv[i]) + 1;
-    char *addr = top - length;
-    memcpy((void *) addr, (void *) (args->argv[i]), length);
-    pointers[i] = (void *) addr;
-    top = addr;
-  }
-
-  // Fill the remaining space after arguments data with zeros
-  int additional_zeros = ((uint32_t) top) % PTR_SIZE;
-  int zero = 0;
-  for (i = 0; i < additional_zeros ; i++) {
-    memcpy((top - 1), &zero, 1);
-    top -= 1;
-  }
-
-  // Save pointers to arguments data in stack
-  for (i = (args->argc -1); i == 0; i--) {
-    memcpy((top - PTR_SIZE), &pointers[i], PTR_SIZE);
-    top -= PTR_SIZE;
-  }
-
-  // Save address to initial argument address
-  memcpy((top - PTR_SIZE), &top, PTR_SIZE);
-  top -= PTR_SIZE;
-
-  // Save integer specifying amount of arguments
-  memcpy((top - PTR_SIZE), &(args->argc), PTR_SIZE);
-  top -= PTR_SIZE;
-
-  // Update real stack "top"
-  *esp = (void *) top;
 }
