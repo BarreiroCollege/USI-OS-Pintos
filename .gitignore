@@ -59,3 +59,9 @@ dkms.conf
 
 # Vagrant
 .vagrant/
+
+pintos-env/pintos/userprog/bochsout.txt
+
+pintos-env/pintos/userprog/bochsrc.txt
+
+pintos-env/pintos/examples/
