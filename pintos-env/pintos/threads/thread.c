@@ -777,7 +777,12 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
     {
       ASSERT (prev != cur);
-      palloc_free_page (prev);
+      #ifdef USERPROG
+      // If there is a parent waiting to resume, do not fully free the thread right now
+      // TODO: Where can it be freed?
+      if (!prev->parent_waiting)
+      #endif
+        palloc_free_page (prev);
     }
 }
 
