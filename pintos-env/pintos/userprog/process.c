@@ -92,7 +92,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char * command)
 {
-  char * cmd_copy;
+  char *cmd_copy, *cmd_copy2, *save_ptr;
   tid_t tid;
 
   /* Make a copy of COMMAND.
@@ -101,6 +101,21 @@ process_execute (const char * command)
   if (cmd_copy == NULL)
     return TID_ERROR;
   strlcpy (cmd_copy, command, PGSIZE);
+
+  /* Make another copy so we can check if the executable exists or not */
+  cmd_copy2 = palloc_get_page (0);
+  if (cmd_copy2 == NULL)
+    return TID_ERROR;
+  strlcpy (cmd_copy2, cmd_copy, PGSIZE);
+
+  /* And check if the executable file exists or not. */
+  char *fn_exec = strtok_r(cmd_copy2, " ", &save_ptr);
+  if (!filesys_open(fn_exec)) {
+    // If not, free all buffers
+    palloc_free_page(cmd_copy);
+    palloc_free_page(cmd_copy2);
+    return TID_ERROR;
+  }
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (command, PRI_DEFAULT, start_process, cmd_copy);
@@ -209,7 +224,8 @@ process_exit (void)
     }
 
   /* Print exit status, required for the tests. */
-  printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  // printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  // See syscall.c exit()
 
   /* Unblock the parent, if the parent is waiting for this thread. */
   if (cur->parent_waiting)
